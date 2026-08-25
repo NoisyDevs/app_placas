@@ -10,6 +10,7 @@ import '../../domain/property_data.dart';
 import '../../domain/property_enums.dart';
 import '../../domain/search_data.dart';
 import '../../placas/registry.dart';
+import '../../services/supabase_service.dart';
 
 /// Sentinel para distinguir "no pasé este argumento a `copyWith`" de
 /// "lo pasé explícitamente en `null`" — ver los comentarios en
@@ -231,13 +232,12 @@ class SessionState {
   }
 
   static SessionState initial() {
-    const agent = AgentProfile(
-      agentId: 'fake-agent-1',
-      nombre: 'Martín Herrera',
-      whatsapp: '+54 9 11 5555-1234',
-      redSocial: '@martin.propiedades',
-      matricula: 'CUCICBA 6789',
-    );
+    // Placeholder hasta que `SessionController.ensureAgentLoaded()` (más
+    // abajo) lo reemplace por el `AgentProfile` real de Supabase Auth — ver
+    // esa nota para el porqué esto ya no es un perfil fake hardcodeado
+    // (ARCHITECTURE.md Fase 4). El router (`app/router.dart`) garantiza que
+    // ninguna pantalla protegida se muestra antes de ese reemplazo.
+    const agent = AgentProfile(agentId: '');
     final defaultTemplateId = templateRegistry.catalog.firstWhere((d) => d.kind == PlacaKind.publicacion).id;
 
     final history = [
@@ -310,12 +310,33 @@ class SessionState {
 String _idByNombre(String nombre, PlacaKind kind) =>
     templateRegistry.catalog.firstWhere((d) => d.nombre == nombre && d.kind == kind).id;
 
+// NOTA para quien mergee esto con el trabajo en paralelo de cupo/billing
+// sobre este mismo archivo: esta rama solo tocó lo relacionado a
+// `AgentProfile`/perfil/auth (el campo `agent`, `initial()`'s `agent` local,
+// `updateAgent`, y el método nuevo `ensureAgentLoaded` de acá abajo).
+// Deliberadamente NO se tocó nada de cupo/consumo: `used`, `limit`,
+// `history`, `consume()`, `upgradeNow()`, `_titleFor` siguen tal cual
+// estaban (todavía fake/local, fuera del alcance de esta rama).
 class SessionController extends Notifier<SessionState> {
   @override
   SessionState build() => SessionState.initial();
 
   void updateAgent(AgentProfile Function(AgentProfile) update) {
     state = state.copyWith(agent: update(state.agent));
+  }
+
+  /// Trae el `AgentProfile` real desde `public.profiles` (Supabase) y
+  /// reemplaza el placeholder de `SessionState.initial()`. La llama el
+  /// `redirect` de `routerProvider` (`app/router.dart`) antes de dejar
+  /// entrar a cualquier pantalla protegida — tanto en un login/registro
+  /// recién hecho como al reabrir la app con una sesión ya persistida
+  /// (Historia 1.1). Es un no-op si el agente logueado ya coincide con el
+  /// que está cargado, para no repetir el fetch en cada navegación.
+  Future<void> ensureAgentLoaded() async {
+    final userId = SupabaseService.instance.currentUser?.id;
+    if (userId == null || state.agent.agentId == userId) return;
+    final profile = await SupabaseService.instance.fetchProfile();
+    state = state.copyWith(agent: profile);
   }
 
   void updateProperty(PropertyDraft Function(PropertyDraft) update) {

@@ -1,3 +1,11 @@
+-- Espejo de supabase/schema.sql para que `supabase db reset` lo aplique
+-- automáticamente. supabase/schema.sql sigue siendo la fuente documentada
+-- que referencian README.md y ARCHITECTURE.md §4 (single-file schema a
+-- propósito, no un historial de migraciones incremental) — este archivo
+-- existe únicamente porque el CLI de Supabase solo aplica DDL que vive bajo
+-- supabase/migrations/. Si se edita schema.sql, este archivo se debe
+-- actualizar en el mismo commit (o regenerar copiando su contenido).
+--
 -- Generador de Placas RE/MAX — schema del MVP.
 -- Ver ARCHITECTURE.md §4 para el razonamiento detrás de cada decisión.
 --
@@ -218,19 +226,11 @@ begin
   -- pueden leer el mismo "used" y pasar juntos el límite.
   perform pg_advisory_xact_lock(hashtextextended(p_agent::text, 0));
 
-  if exists (
-    select 1 from public.placa_events
-    where agent_id = p_agent and client_request_id = p_request
-  ) then
-    -- Reintento idempotente: mismo request_id, no se cobra de nuevo.
-    select count(*)::int into v_used
-    from public.placa_events
-    where agent_id = p_agent and created_at >= public.current_period_start();
-
-    return query select true, 'replay'::text, v_used, null::integer;
-    return;
-  end if;
-
+  -- v_limit se calcula siempre, antes de mirar si es un reintento: la rama
+  -- 'replay' de abajo lo necesita para responder el límite real (BUG real
+  -- encontrado en verificación local: antes devolvía null::integer fijo en
+  -- el replay sin importar el tier, así que un doble-tap de un agente free
+  -- veía "sin límite" hasta el próximo consumo no repetido).
   select case
            when tier = 'pro'
             and (current_period_end is null or current_period_end > now())
@@ -241,6 +241,19 @@ begin
   from public.subscriptions
   where agent_id = p_agent
   for update;
+
+  if exists (
+    select 1 from public.placa_events
+    where agent_id = p_agent and client_request_id = p_request
+  ) then
+    -- Reintento idempotente: mismo request_id, no se cobra de nuevo.
+    select count(*)::int into v_used
+    from public.placa_events
+    where agent_id = p_agent and created_at >= public.current_period_start();
+
+    return query select true, 'replay'::text, v_used, v_limit;
+    return;
+  end if;
 
   select count(*)::int into v_used
   from public.placa_events
@@ -261,37 +274,24 @@ begin
 end;
 $$;
 
--- Sin grant a 'authenticated': consume_placa_credit() solo la ejecuta
--- service_role (el backend), nunca el cliente Flutter directamente.
+-- BUG real encontrado en verificación local (2026-08-25): "sin grant a
+-- authenticated" NO alcanza para bloquear esta función. El proyecto de
+-- Supabase configura (vía ALTER DEFAULT PRIVILEGES a nivel de rol postgres/
+-- supabase_admin) que toda función NUEVA creada en el schema public recibe
+-- EXECUTE automáticamente para anon, authenticated y service_role — no es
+-- un grant a PUBLIC (revocar "from public" no alcanza; hay que revocar de
+-- los roles concretos). Verificado con
+-- has_function_privilege('authenticated', ..., 'execute') = true antes del
+-- fix. Como esta función es security definer y confía en p_agent sin
+-- validarlo contra auth.uid() (por diseño: el único llamante legítimo es el
+-- backend, que ya verificó el JWT y pasa el agent_id correcto), dejar el
+-- EXECUTE de authenticated/anon abierto permitía que cualquier usuario
+-- autenticado (o incluso anon) consumiera o escribiera indebidamente
+-- placa_events a nombre de OTRO agente con solo pasar su uuid como p_agent.
+revoke execute on function public.consume_placa_credit(
+  uuid, uuid, text, text, text[], boolean
+) from public, anon, authenticated;
 
--- ---------------------------------------------------------------------------
--- avatars: bucket de Storage para fotos de perfil de agentes (Historia 1.2,
--- "subida de foto de perfil"). `profiles.foto_path` guarda la RUTA dentro
--- del bucket, nunca una URL completa (ver arriba).
---
--- Convención de path: {agent_id}/foto.<ext> — el primer segmento del path
--- es el propio agent_id, así storage.foldername(name) alcanza para que las
--- policies garanticen "un agente solo sube/lee/reemplaza SU propia foto",
--- sin necesitar una tabla de metadatos aparte. Privado (public = false): se
--- sirve vía download/URL firmada autenticados, nunca por URL pública.
--- ---------------------------------------------------------------------------
-insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('avatars', 'avatars', false, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
-on conflict (id) do nothing;
-
-create policy avatars_select_own on storage.objects
-  for select to authenticated
-  using (bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
-
-create policy avatars_insert_own on storage.objects
-  for insert to authenticated
-  with check (bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
-
-create policy avatars_update_own on storage.objects
-  for update to authenticated
-  using (bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1])
-  with check (bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
-
-create policy avatars_delete_own on storage.objects
-  for delete to authenticated
-  using (bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
+grant execute on function public.consume_placa_credit(
+  uuid, uuid, text, text, text[], boolean
+) to service_role;

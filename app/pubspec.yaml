@@ -48,6 +48,14 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
 
+  # Solo para test/widget_test.dart: `SharedPreferences.setMockInitialValues`
+  # mockea el storage local que usa `supabase_flutter` internamente para
+  # persistir la sesión — sin esto, `Supabase.initialize()` en un test tira
+  # `MissingPluginException` (no hay handler real de method channel).
+  # Ya viene como dependencia transitiva de supabase_flutter; se declara acá
+  # explícita porque el test la importa directo.
+  shared_preferences: ^2.5.3
+
   # lib/domain/** es Dart puro (sin imports de Flutter) a propósito, así que
   # sus tests corren con `dart test`, no con `flutter test` — más rápido y
   # no depende de un device/renderer. Ver ARCHITECTURE.md §8, Fase 1.
