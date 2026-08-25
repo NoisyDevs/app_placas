@@ -5,11 +5,68 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_theme.dart';
 import '../../../app/widgets/app_button.dart';
 import '../../../app/widgets/app_text_field.dart';
+import '../../../app/widgets/app_toast.dart';
+import '../../../services/supabase_service.dart';
 
-/// Pantalla 01 del mockup ("Login / registro"). Sin backend todavía
-/// (ARCHITECTURE.md Fase 4: Supabase Auth) — los dos botones solo navegan.
-class LoginScreen extends StatelessWidget {
+/// Pantalla 01 del mockup ("Login / registro"). Conectada a Supabase Auth
+/// real (ARCHITECTURE.md Fase 4): "Crear mi cuenta" registra por
+/// email+contraseña, "Iniciá sesión" usa los mismos campos para loguear a
+/// una cuenta existente. El local de desarrollo tiene
+/// `auth.email.enable_confirmations = false`, así que el registro deja una
+/// sesión activa de una — no hace falta un paso de "confirmá tu email"
+/// acá.
+class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _emailController = TextEditingController(text: 'martin@propiedades.com');
+  final _passwordController = TextEditingController(text: '123456');
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _signUp() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await SupabaseService.instance.signUp(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+      if (!mounted) return;
+      context.go('/onboarding');
+    } catch (e) {
+      if (mounted) showAppToast(context, SupabaseService.describeError(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _signIn() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await SupabaseService.instance.signIn(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+      if (!mounted) return;
+      context.go('/home');
+    } catch (e) {
+      if (mounted) showAppToast(context, SupabaseService.describeError(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -55,16 +112,21 @@ class LoginScreen extends StatelessWidget {
                   style: TextStyle(fontSize: 15, color: AppColors.textMuted, height: 1.5),
                 ),
                 const SizedBox(height: 26),
-                const AppTextField(label: 'Email', initialValue: 'martin@propiedades.com', hint: 'tu@inmobiliaria.com'),
+                AppTextField(
+                  label: 'Email',
+                  controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  hint: 'tu@inmobiliaria.com',
+                ),
                 const SizedBox(height: 14),
-                const AppTextField(label: 'Contraseña', initialValue: '123456', obscureText: true),
+                AppTextField(label: 'Contraseña', controller: _passwordController, obscureText: true),
                 const SizedBox(height: 14),
                 AppButton(
-                  label: 'Crear mi cuenta',
+                  label: _busy ? 'Creando cuenta…' : 'Crear mi cuenta',
                   variant: AppButtonVariant.primary,
                   size: AppButtonSize.lg,
                   full: true,
-                  onPressed: () => context.go('/onboarding'),
+                  onPressed: _busy ? null : _signUp,
                 ),
                 const SizedBox(height: 14),
                 Center(
@@ -73,7 +135,7 @@ class LoginScreen extends StatelessWidget {
                     children: [
                       const Text('¿Ya tenés cuenta? ', style: TextStyle(fontSize: 13.5, color: AppColors.textMuted)),
                       InkWell(
-                        onTap: () => context.go('/home'),
+                        onTap: _busy ? null : _signIn,
                         child: const Text(
                           'Iniciá sesión',
                           style: TextStyle(fontSize: 13.5, color: AppColors.primary, fontWeight: FontWeight.w700),

@@ -48,6 +48,16 @@ class _ShareScreenState extends ConsumerState<ShareScreen> {
     if (_busy) return;
 
     final session = ref.read(sessionProvider);
+
+    // Historia 1.2, último criterio: avisar si el perfil está incompleto
+    // (falta foto o WhatsApp) antes de generar. La matrícula queda afuera
+    // de este chequeo a propósito — `isCompleteForPlaca` no la exige,
+    // porque no todos los templates la requieren.
+    if (!session.agent.isCompleteForPlaca) {
+      showAppToast(context, 'Completá tu foto y WhatsApp en tu perfil antes de generar una placa.');
+      context.go('/profile');
+      return;
+    }
     if (session.left <= 0) {
       context.go('/upgrade');
       return;

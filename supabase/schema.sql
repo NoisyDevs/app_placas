@@ -287,3 +287,35 @@ revoke execute on function public.consume_placa_credit(
 grant execute on function public.consume_placa_credit(
   uuid, uuid, text, text, text[], boolean
 ) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- avatars: bucket de Storage para fotos de perfil de agentes (Historia 1.2,
+-- "subida de foto de perfil"). `profiles.foto_path` guarda la RUTA dentro
+-- del bucket, nunca una URL completa (ver arriba).
+--
+-- Convención de path: {agent_id}/foto.<ext> — el primer segmento del path
+-- es el propio agent_id, así storage.foldername(name) alcanza para que las
+-- policies garanticen "un agente solo sube/lee/reemplaza SU propia foto",
+-- sin necesitar una tabla de metadatos aparte. Privado (public = false): se
+-- sirve vía download/URL firmada autenticados, nunca por URL pública.
+-- ---------------------------------------------------------------------------
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('avatars', 'avatars', false, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
+on conflict (id) do nothing;
+
+create policy avatars_select_own on storage.objects
+  for select to authenticated
+  using (bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
+
+create policy avatars_insert_own on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
+
+create policy avatars_update_own on storage.objects
+  for update to authenticated
+  using (bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1])
+  with check (bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
+
+create policy avatars_delete_own on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
