@@ -43,6 +43,11 @@ dependencies:
   # Formato de precios y fechas en es-AR.
   intl: ^0.20.3
 
+  # Bindings tipados de DOM/JS para el exportador web (anchor+blob download,
+  # Web Share API) — dart:js_interop, nunca dart:html (deprecado en el Dart
+  # de este proyecto). Ver services/share_service_web.dart.
+  web: ^1.1.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

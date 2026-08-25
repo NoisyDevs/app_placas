@@ -1,3 +1,11 @@
+-- Espejo de supabase/schema.sql para que `supabase db reset` lo aplique
+-- automáticamente. supabase/schema.sql sigue siendo la fuente documentada
+-- que referencian README.md y ARCHITECTURE.md §4 (single-file schema a
+-- propósito, no un historial de migraciones incremental) — este archivo
+-- existe únicamente porque el CLI de Supabase solo aplica DDL que vive bajo
+-- supabase/migrations/. Si se edita schema.sql, este archivo se debe
+-- actualizar en el mismo commit (o regenerar copiando su contenido).
+--
 -- Generador de Placas RE/MAX — schema del MVP.
 -- Ver ARCHITECTURE.md §4 para el razonamiento detrás de cada decisión.
 --

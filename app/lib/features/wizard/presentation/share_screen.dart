@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -8,31 +10,86 @@ import '../../../app/widgets/app_button.dart';
 import '../../../app/widgets/app_scaffold.dart';
 import '../../../app/widgets/app_toast.dart';
 import '../../../domain/property_enums.dart';
+import '../../../placas/export/placa_exporter.dart';
 import '../../../placas/placa_preview.dart';
+import '../../../services/share_service.dart';
 import '../../session/session_controller.dart';
 
-/// Pantalla 10 · "Descargar y compartir". Ojo: ni acá ni en el mockup
-/// original hay export de imagen real todavía — los botones son el mismo
-/// mock-con-toast que `PlacasApp.dc.html` (`descargar`/`shareWa`/etc. solo
-/// llaman `toast(...)`). El exportador real (`placas/export/**`,
-/// `share_plus`/`gal`, forzar CanvasKit en web — ARCHITECTURE.md §9 trampa
-/// 1) queda para cuando el resto del flujo esté validado.
-class ShareScreen extends ConsumerWidget {
+/// Pantalla 10 · "Descargar y compartir". Export real: el `RepaintBoundary`
+/// de acá abajo envuelve el `PlacaPreview` (que internamente pinta un
+/// `PlacaCanvas`) tal cual se ve en pantalla — VISIBLE, nunca dentro de un
+/// `Offstage: true` (ARCHITECTURE.md §9, trampa 2) — y `capturePlacaPng`
+/// compensa la escala del `FittedBox` con `pixelRatio` para emitir siempre
+/// el PNG a resolución real (1080×1080 / 1080×1920), sin importar el
+/// tamaño con el que se esté mostrando este preview.
+class ShareScreen extends ConsumerStatefulWidget {
   const ShareScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final session = ref.watch(sessionProvider);
-    final controller = ref.read(sessionProvider.notifier);
+  ConsumerState<ShareScreen> createState() => _ShareScreenState();
+}
 
-    void descargar() {
-      if (session.left <= 0) {
-        context.go('/upgrade');
+class _ShareScreenState extends ConsumerState<ShareScreen> {
+  final GlobalKey _boundaryKey = GlobalKey();
+  bool _busy = false;
+
+  /// Local y por-visita-de-pantalla, igual que el resto de `SessionState`
+  /// (Fase 3 de ARCHITECTURE.md §8 — todavía no hay `POST
+  /// /v1/placas/consume`). Descargar y compartir la MISMA placa generada
+  /// en esta visita consumen un solo crédito, no uno por botón tocado —
+  /// coincide con la regla real ("1 placa = 1 acto de generación",
+  /// ARCHITECTURE.md §4) sin necesitar todavía un `request_id` de
+  /// servidor para la idempotencia.
+  bool _consumed = false;
+
+  Future<void> _runExport(
+    Future<PlacaShareResult> Function(Uint8List bytes, {required String fileName}) action,
+  ) async {
+    if (_busy) return;
+
+    final session = ref.read(sessionProvider);
+    if (session.left <= 0) {
+      context.go('/upgrade');
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      final Uint8List bytes;
+      try {
+        bytes = await capturePlacaPng(boundaryKey: _boundaryKey, format: session.format);
+      } on PlacaExportException catch (e) {
+        if (mounted) showAppToast(context, e.message);
         return;
       }
-      controller.consume();
-      showAppToast(context, 'Placa descargada · lista para publicar');
+
+      final fileName = _fileNameFor(session.format);
+      final result = await action(bytes, fileName: fileName);
+      if (!mounted) return;
+
+      if (result.ok && !_consumed) {
+        _consumed = true;
+        ref.read(sessionProvider.notifier).consume();
+      }
+      showAppToast(context, result.message ?? (result.ok ? 'Listo.' : 'Algo salió mal.'));
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
+  }
+
+  String _fileNameFor(PlacaFormat format) {
+    final tag = format == PlacaFormat.story ? 'story' : 'feed';
+    return 'placa-$tag-${DateTime.now().millisecondsSinceEpoch}.png';
+  }
+
+  void _handleSave() => _runExport(savePlaca);
+
+  void _handleShare() => _runExport(sharePlaca);
+
+  @override
+  Widget build(BuildContext context) {
+    final session = ref.watch(sessionProvider);
+    final isStory = session.format == PlacaFormat.story;
 
     return AppWizardScaffold(
       title: 'Descargar y compartir',
@@ -41,7 +98,7 @@ class ShareScreen extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
-            width: 180,
+            width: isStory ? 180 * 9 / 16 : 180,
             decoration: BoxDecoration(
               color: AppColors.white,
               borderRadius: BorderRadius.circular(14),
@@ -49,13 +106,20 @@ class ShareScreen extends ConsumerWidget {
             ),
             clipBehavior: Clip.antiAlias,
             child: AspectRatio(
-              aspectRatio: 1,
-              child: PlacaPreview(
-                templateId: session.templateId,
-                content: session.content,
-                agent: session.agent,
-                format: PlacaFormat.feed,
-                includeContact: session.includeContact,
+              aspectRatio: isStory ? 9 / 16 : 1,
+              // El RepaintBoundary tiene que envolver justo lo que se ve
+              // — sin el Container/boxShadow de arriba, que no son parte
+              // de la placa — para que `capturePlacaPng` capture
+              // exactamente lo que el agente está mirando.
+              child: RepaintBoundary(
+                key: _boundaryKey,
+                child: PlacaPreview(
+                  templateId: session.templateId,
+                  content: session.content,
+                  agent: session.agent,
+                  format: session.format,
+                  includeContact: session.includeContact,
+                ),
               ),
             ),
           ),
@@ -66,11 +130,12 @@ class ShareScreen extends ConsumerWidget {
           ),
           const SizedBox(height: AppSpacing.s5),
           AppButton(
-            label: '↓ Descargar imagen',
+            label: _busy ? 'Generando…' : '↓ Descargar imagen',
             variant: AppButtonVariant.primary,
             size: AppButtonSize.lg,
             full: true,
-            onPressed: descargar,
+            leading: _busy ? const _MiniSpinner(color: AppColors.primaryContrast) : null,
+            onPressed: _busy ? null : _handleSave,
           ),
           const SizedBox(height: 18),
           const Text(
@@ -85,7 +150,8 @@ class ShareScreen extends ConsumerWidget {
                   label: 'WhatsApp',
                   icon: Icons.chat_bubble_outline_rounded,
                   bg: const Color(0xFF25D366),
-                  onTap: () => showAppToast(context, 'Abriendo WhatsApp…'),
+                  enabled: !_busy,
+                  onTap: _handleShare,
                 ),
               ),
               const SizedBox(width: 10),
@@ -94,17 +160,23 @@ class ShareScreen extends ConsumerWidget {
                   label: 'Instagram',
                   icon: Icons.camera_alt_outlined,
                   bg: AppColors.violet500,
-                  onTap: () => showAppToast(context, 'Compartiendo en Instagram…'),
+                  enabled: !_busy,
+                  onTap: _handleShare,
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: _ShareTile(
-                  label: 'Copiar link',
-                  icon: Icons.link_rounded,
+                  // No hay "link" que copiar: la placa no vive en ningún
+                  // servidor (ARCHITECTURE.md — one-shot, nunca se sube a
+                  // un backend). Las tres tiles abren el mismo panel de
+                  // compartir del sistema; ahí el agente elige el destino.
+                  label: 'Compartir',
+                  icon: Icons.ios_share_rounded,
                   bg: AppColors.surfaceInset,
                   iconColor: AppColors.text,
-                  onTap: () => showAppToast(context, 'Link copiado'),
+                  enabled: !_busy,
+                  onTap: _handleShare,
                 ),
               ),
             ],
@@ -114,7 +186,7 @@ class ShareScreen extends ConsumerWidget {
             label: 'Crear otra placa',
             variant: AppButtonVariant.ghost,
             full: true,
-            onPressed: () => context.go('/home'),
+            onPressed: _busy ? null : () => context.go('/home'),
           ),
         ],
       ),
@@ -122,40 +194,66 @@ class ShareScreen extends ConsumerWidget {
   }
 }
 
+class _MiniSpinner extends StatelessWidget {
+  const _MiniSpinner({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 15,
+      height: 15,
+      child: CircularProgressIndicator(strokeWidth: 2, color: color),
+    );
+  }
+}
+
 class _ShareTile extends StatelessWidget {
-  const _ShareTile({required this.label, required this.icon, required this.bg, required this.onTap, this.iconColor});
+  const _ShareTile({
+    required this.label,
+    required this.icon,
+    required this.bg,
+    required this.onTap,
+    this.iconColor,
+    this.enabled = true,
+  });
 
   final String label;
   final IconData icon;
   final Color bg;
   final Color? iconColor;
+  final bool enabled;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: onTap,
+      onTap: enabled ? onTap : null,
       borderRadius: BorderRadius.circular(13),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 6),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          border: Border.all(color: AppColors.border, width: 1.5),
-          borderRadius: BorderRadius.circular(13),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 38,
-              height: 38,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(11)),
-              child: Icon(icon, size: 20, color: iconColor ?? AppColors.white),
-            ),
-            const SizedBox(height: 7),
-            Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.text)),
-          ],
+      child: Opacity(
+        opacity: enabled ? 1 : 0.5,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 6),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            border: Border.all(color: AppColors.border, width: 1.5),
+            borderRadius: BorderRadius.circular(13),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(11)),
+                child: Icon(icon, size: 20, color: iconColor ?? AppColors.white),
+              ),
+              const SizedBox(height: 7),
+              Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.text)),
+            ],
+          ),
         ),
       ),
     );
