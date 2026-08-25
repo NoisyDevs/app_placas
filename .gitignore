@@ -1,0 +1,33 @@
+# --- backend (Python / FastAPI) ---
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.pytest_cache/
+backend/.env
+
+# --- app (Flutter) ---
+# android/ ios/ web/ SÍ se versionan (config real de plataforma, generada una
+# sola vez por `flutter create .`) — acá solo van sus artefactos de build.
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.packages
+app/build/
+app/android/.gradle/
+app/android/local.properties
+app/ios/Flutter/ephemeral/
+app/ios/Pods/
+app/macos/Flutter/ephemeral/
+app/windows/flutter/ephemeral/
+app/linux/flutter/ephemeral/
+app/*.iml
+app/.idea/
+
+# --- supabase ---
+supabase/.branches/
+supabase/.temp/
+
+# --- editor / OS ---
+.vscode/
+.DS_Store
+Thumbs.db

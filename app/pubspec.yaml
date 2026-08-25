@@ -1,0 +1,64 @@
+name: placas
+description: Generador de placas de marketing para agentes inmobiliarios.
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.13.0 <4.0.0"
+
+# Este pubspec.yaml está escrito a mano (ver ARCHITECTURE.md — el SDK de
+# Flutter todavía se está instalando en esta máquina al momento de crear
+# este archivo). Una vez instalado, correr `flutter create .` en esta
+# carpeta para generar android/ ios/ web/ sobre este mismo pubspec, y
+# después `flutter pub get`.
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Estado: AsyncValue mapea 1:1 a loading/data/error, sin build_runner.
+  flutter_riverpod: ^3.4.2
+
+  # Routing: el target web necesita URLs reales.
+  go_router: ^18.0.0
+
+  # Auth + perfil + lectura de cupo directo, sin pasar por el backend.
+  supabase_flutter: ^2.17.2
+
+  # Motor de templates: shrink-to-fit para PlacaHeadline/PlacaLabel — ver
+  # ARCHITECTURE.md §2 "Overflow de texto".
+  auto_size_text: ^3.0.0
+
+  # Selección de fotos, en ambos targets, siempre vía XFile.readAsBytes()
+  # para que el pipeline sea bytes-only (las fotos nunca tocan disco/red).
+  image_picker: ^1.2.3
+
+  # Share sheet nativo en mobile; en web se usa solo si el navegador expone
+  # la Web Share API (si no, download explícito — ver services/share_service).
+  share_plus: ^13.3.0
+
+  # Guardar la placa exportada en la galería (mobile).
+  gal: ^2.3.3
+
+  # Formato de precios y fechas en es-AR.
+  intl: ^0.20.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+  # lib/domain/** es Dart puro (sin imports de Flutter) a propósito, así que
+  # sus tests corren con `dart test`, no con `flutter test` — más rápido y
+  # no depende de un device/renderer. Ver ARCHITECTURE.md §8, Fase 1.
+  #
+  # Fijado en 1.31.1 (no ^1.31.2): el flutter_test que trae este SDK pinea
+  # test_api en 0.7.12, y test 1.31.2 ya pide test_api 0.7.13 — 1.31.1 es la
+  # última versión de `test` compatible con el SDK actual (Flutter 3.47.1 /
+  # Dart 3.13.1). Revisar este pin cuando se actualice el SDK.
+  test: 1.31.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - lib/placas/packs/remax/assets/
