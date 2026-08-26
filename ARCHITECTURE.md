@@ -371,22 +371,32 @@ export 'share_service_io.dart' if (dart.library.js_interop) 'share_service_web.d
 
 ## 8. Orden de implementación por fases
 
-- **Fase 0** — todo lo verificable hoy, sin Flutter: `ARCHITECTURE.md`,
+Estado real al día de hoy (ver "Project status" en `CLAUDE.md` para el
+detalle vivo — esto queda como el plan original, con una marca de qué se
+cumplió):
+
+- ✅ **Fase 0** — todo lo verificable hoy, sin Flutter: `ARCHITECTURE.md`,
   `supabase/schema.sql` + `seed.sql`, backend FastAPI con `/v1/health` +
   `/v1/placas/consume`, tests con pytest.
-- **Fase 1** — `pubspec.yaml` + `lib/domain/**` (Dart puro).
-- **Fase 2** — primer píxel: `main.dart` renderiza **una placa hardcodeada**
+- ✅ **Fase 1** — `pubspec.yaml` + `lib/domain/**` (Dart puro).
+- ✅ **Fase 2** — primer píxel: `main.dart` renderiza **una placa hardcodeada**
   (`hero_v1`, feed) con datos fake. Sin auth, sin backend, sin wizard. Es el
   hito visible y de paso valida la parte más difícil (el kit) antes de armar
   el resto.
-- **Fase 3** — wizard + export + compartir/descargar, con perfil local fake.
+- ✅ **Fase 3** — wizard + export + compartir/descargar, con perfil local fake.
   Producto demostrable de punta a punta.
-- **Fase 4** — Auth de Supabase, CRUD de perfil, subida de foto a Storage,
+- ✅ **Fase 4** — Auth de Supabase, CRUD de perfil, subida de foto a Storage,
   lectura de cupo.
-- **Fase 5** — llamada de consumo + muro de upgrade.
-- **Fase 6** — suscripción MP + webhook; cortesía por SQL.
-- **Fase 7** — templates restantes, suite completa de goldens, hardening web,
-  empaquetado para tiendas.
+- ✅ **Fase 5** — llamada de consumo + muro de upgrade.
+- 🟡 **Fase 6** — suscripción MP + webhook (código y máquina de estados
+  hechos y testeados); cortesía por SQL (mecanismo listo, sin usar todavía).
+  Falta probar contra credenciales reales de Mercado Pago — las de hoy son
+  placeholders de dev, la suscripción llega al backend pero MP la rechaza.
+- 🟡 **Fase 7** — los 5 templates y la suite completa de 50 goldens están
+  hechos. Falta: hardening web más allá de forzar CanvasKit, empaquetado
+  para tiendas (Play Store / App Store), iOS (necesita Mac o CI en la nube),
+  y la fuente `Space Grotesk` sigue sin empaquetar (cae a la fuente del
+  sistema — deliberadamente sin resolver todavía).
 
 ## 9. Trampas conocidas y qué se difiere a propósito
 
