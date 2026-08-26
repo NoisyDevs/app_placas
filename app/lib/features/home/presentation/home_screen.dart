@@ -9,22 +9,60 @@ import '../../../domain/property_enums.dart';
 import '../../../placas/placa_preview.dart';
 import '../../session/session_controller.dart';
 
-class HomeScreen extends ConsumerWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  bool _refreshingQuota = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // ARCHITECTURE.md §5.2: el cupo se lee real (rpc('quota_status')) al
+    // entrar — reemplaza el `used`/`limit` de arranque de
+    // `SessionState.initial()` apenas la pantalla monta.
+    _refreshQuota();
+  }
+
+  Future<void> _refreshQuota() async {
+    setState(() => _refreshingQuota = true);
+    try {
+      await ref.read(sessionProvider.notifier).refreshQuota();
+    } catch (_) {
+      // Lectura de cupo caída: no bloqueamos Home por esto (se sigue
+      // mostrando el último cupo conocido) — el gate que de verdad importa
+      // es el `POST /v1/placas/consume` del backend al generar, que sí
+      // falla cerrado (ARCHITECTURE.md §5.6). Acá solo es una lectura de
+      // UX para decidir si mostrar el muro de upgrade antes de tiempo.
+    } finally {
+      if (mounted) setState(() => _refreshingQuota = false);
+    }
+  }
+
+  /// Antes de abrir el wizard, vuelve a leer el cupo real (puede haber
+  /// cambiado desde que se abrió Home) y manda al muro de upgrade si ya
+  /// está en 0 — ARCHITECTURE.md §5.2, "se muestra el muro de upgrade
+  /// ANTES de que el agente cargue los datos".
+  Future<void> _goCrear() async {
+    await _refreshQuota();
+    if (!mounted) return;
+    final left = ref.read(sessionProvider).left;
+    if (left != null && left <= 0) {
+      context.go('/upgrade');
+    } else {
+      context.go('/new');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
     final firstName = session.agent.nombre.trim().isEmpty ? 'Agente' : session.agent.nombre.trim().split(RegExp(r'\s+')).first;
     final initials = _initials(session.agent.nombre);
-
-    void goCrear() {
-      if (session.left <= 0) {
-        context.go('/upgrade');
-      } else {
-        context.go('/new');
-      }
-    }
 
     return Scaffold(
       body: SafeArea(
@@ -61,9 +99,14 @@ class HomeScreen extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: AppSpacing.s5),
-              _QuotaCard(left: session.left, limit: session.limit, onTap: () => context.go('/upgrade')),
+              _QuotaCard(
+                left: session.left,
+                limit: session.limit,
+                loading: _refreshingQuota && !session.quotaLoaded,
+                onTap: () => context.go('/upgrade'),
+              ),
               const SizedBox(height: AppSpacing.s4),
-              _CreateCta(onTap: goCrear),
+              _CreateCta(onTap: _goCrear),
               const SizedBox(height: 26),
               Row(
                 children: [
@@ -110,7 +153,7 @@ class HomeScreen extends ConsumerWidget {
       bottomNavigationBar: AppBottomNav(
         currentIsHome: true,
         onHome: () {},
-        onCreate: goCrear,
+        onCreate: _goCrear,
         onHistory: () => context.go('/history'),
       ),
     );
@@ -124,16 +167,20 @@ class HomeScreen extends ConsumerWidget {
 }
 
 class _QuotaCard extends StatelessWidget {
-  const _QuotaCard({required this.left, required this.limit, required this.onTap});
+  const _QuotaCard({required this.left, required this.limit, required this.onTap, this.loading = false});
 
-  final int left;
-  final int limit;
+  /// `null` == cupo ilimitado (plan pro/cortesía) — ver `SessionState.left`.
+  final int? left;
+  final int? limit;
+  final bool loading;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final color = left <= 2 ? AppColors.danger : (left <= 5 ? AppColors.warning : AppColors.accent);
-    final ratio = limit == 0 ? 0.0 : left / limit;
+    final isUnlimited = limit == null;
+    final safeLeft = left ?? 0;
+    final color = isUnlimited ? AppColors.accent : (safeLeft <= 2 ? AppColors.danger : (safeLeft <= 5 ? AppColors.warning : AppColors.accent));
+    final ratio = isUnlimited || limit == 0 ? 1.0 : safeLeft / limit!;
 
     return InkWell(
       onTap: onTap,
@@ -150,17 +197,25 @@ class _QuotaCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Text(
-                  'PLACAS GRATIS ESTE MES',
-                  style: TextStyle(fontFamily: 'Space Mono', fontSize: 11, letterSpacing: 1.2, color: AppColors.textSubtle),
+                Text(
+                  isUnlimited ? 'PLACAS ESTE MES' : 'PLACAS GRATIS ESTE MES',
+                  style: const TextStyle(fontFamily: 'Space Mono', fontSize: 11, letterSpacing: 1.2, color: AppColors.textSubtle),
                 ),
+                if (loading) ...[
+                  const SizedBox(width: 8),
+                  const SizedBox(
+                    width: 10,
+                    height: 10,
+                    child: CircularProgressIndicator(strokeWidth: 1.5, color: AppColors.textSubtle),
+                  ),
+                ],
                 const Spacer(),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
                   decoration: BoxDecoration(color: AppColors.primarySoft, borderRadius: BorderRadius.circular(6)),
-                  child: const Text(
-                    'PLAN FREE',
-                    style: TextStyle(
+                  child: Text(
+                    isUnlimited ? 'PLAN PRO' : 'PLAN FREE',
+                    style: const TextStyle(
                       fontFamily: 'Space Mono',
                       fontSize: 9.5,
                       letterSpacing: 1,
@@ -175,11 +230,16 @@ class _QuotaCard extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.baseline,
               textBaseline: TextBaseline.alphabetic,
-              children: [
-                Text('$left', style: TextStyle(fontSize: 38, fontWeight: FontWeight.w800, letterSpacing: -0.5, color: color)),
-                const SizedBox(width: 8),
-                Text('de $limit restantes', style: const TextStyle(fontSize: 15, color: AppColors.textMuted, fontWeight: FontWeight.w600)),
-              ],
+              children: isUnlimited
+                  ? [
+                      Text('Ilimitado', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: -0.5, color: color)),
+                    ]
+                  : [
+                      Text('$safeLeft', style: TextStyle(fontSize: 38, fontWeight: FontWeight.w800, letterSpacing: -0.5, color: color)),
+                      const SizedBox(width: 8),
+                      Text('de $limit restantes',
+                          style: const TextStyle(fontSize: 15, color: AppColors.textMuted, fontWeight: FontWeight.w600)),
+                    ],
             ),
             const SizedBox(height: 12),
             ClipRRect(
@@ -192,15 +252,16 @@ class _QuotaCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 10),
-            RichText(
-              text: const TextSpan(
-                style: TextStyle(fontSize: 12.5, color: AppColors.textMuted),
-                children: [
-                  TextSpan(text: 'Se renueva el 1 de agosto · '),
-                  TextSpan(text: 'Pasar a ilimitado →', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w700)),
-                ],
+            if (!isUnlimited)
+              RichText(
+                text: const TextSpan(
+                  style: TextStyle(fontSize: 12.5, color: AppColors.textMuted),
+                  children: [
+                    TextSpan(text: 'Se renueva el 1 de agosto · '),
+                    TextSpan(text: 'Pasar a ilimitado →', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w700)),
+                  ],
+                ),
               ),
-            ),
           ],
         ),
       ),

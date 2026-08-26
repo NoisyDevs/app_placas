@@ -9,6 +9,7 @@ import '../../../app/widgets/app_scaffold.dart';
 import '../../../app/widgets/app_toast.dart';
 import '../../../domain/property_enums.dart';
 import '../../../placas/placa_preview.dart';
+import '../../../services/backend_client.dart';
 import '../../session/session_controller.dart';
 
 /// Pantalla 10 · "Descargar y compartir". Ojo: ni acá ni en el mockup
@@ -17,22 +18,57 @@ import '../../session/session_controller.dart';
 /// llaman `toast(...)`). El exportador real (`placas/export/**`,
 /// `share_plus`/`gal`, forzar CanvasKit en web — ARCHITECTURE.md §9 trampa
 /// 1) queda para cuando el resto del flujo esté validado.
-class ShareScreen extends ConsumerWidget {
+class ShareScreen extends ConsumerStatefulWidget {
   const ShareScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final session = ref.watch(sessionProvider);
-    final controller = ref.read(sessionProvider.notifier);
+  ConsumerState<ShareScreen> createState() => _ShareScreenState();
+}
 
-    void descargar() {
-      if (session.left <= 0) {
+class _ShareScreenState extends ConsumerState<ShareScreen> {
+  bool _generating = false;
+
+  /// "Descargar imagen": pide permiso real al backend antes de dar la
+  /// placa por generada (ARCHITECTURE.md §5.3-4 — el render en sí, acá
+  /// todavía mockeado con un toast, solo corre después de `granted`).
+  /// `_generating` evita que el usuario dispare un segundo tap mientras el
+  /// primero está en vuelo; aunque el backend ya es idempotente por
+  /// `request_id`, esto ahorra la llamada de red redundante.
+  Future<void> _descargar() async {
+    final session = ref.read(sessionProvider);
+    if (session.left != null && session.left! <= 0) {
+      context.go('/upgrade');
+      return;
+    }
+    if (_generating) return;
+    setState(() => _generating = true);
+    try {
+      final controller = ref.read(sessionProvider.notifier);
+      final backendClient = ref.read(backendClientProvider);
+      final outcome = await controller.generatePlaca(backendClient);
+      if (!mounted) return;
+      if (outcome == GenerateOutcome.quotaExceeded) {
         context.go('/upgrade');
         return;
       }
-      controller.consume();
       showAppToast(context, 'Placa descargada · lista para publicar');
+    } on QuotaExceededException {
+      if (!mounted) return;
+      context.go('/upgrade');
+    } on BackendException catch (e) {
+      if (!mounted) return;
+      showAppToast(
+        context,
+        e.statusCode == 0 ? 'No hay conexión con el servidor. Probá de nuevo.' : 'No pudimos generar la placa. Probá de nuevo.',
+      );
+    } finally {
+      if (mounted) setState(() => _generating = false);
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = ref.watch(sessionProvider);
 
     return AppWizardScaffold(
       title: 'Descargar y compartir',
@@ -66,11 +102,11 @@ class ShareScreen extends ConsumerWidget {
           ),
           const SizedBox(height: AppSpacing.s5),
           AppButton(
-            label: '↓ Descargar imagen',
+            label: _generating ? 'Generando…' : '↓ Descargar imagen',
             variant: AppButtonVariant.primary,
             size: AppButtonSize.lg,
             full: true,
-            onPressed: descargar,
+            onPressed: _generating ? null : _descargar,
           ),
           const SizedBox(height: 18),
           const Text(

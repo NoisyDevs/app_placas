@@ -25,6 +25,11 @@ dependencies:
   # Auth + perfil + lectura de cupo directo, sin pasar por el backend.
   supabase_flutter: ^2.17.2
 
+  # Cliente HTTP delgado hacia backend/ (FastAPI) — consumo de cupo y
+  # billing. Versión confirmada contra https://pub.dev/api/packages/http
+  # (no asumida) antes de fijarla acá.
+  http: ^1.6.0
+
   # Motor de templates: shrink-to-fit para PlacaHeadline/PlacaLabel — ver
   # ARCHITECTURE.md §2 "Overflow de texto".
   auto_size_text: ^3.0.0

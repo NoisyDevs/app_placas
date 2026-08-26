@@ -8,9 +8,12 @@ import '../../../domain/property_enums.dart';
 import '../../../placas/placa_preview.dart';
 import '../../session/session_controller.dart';
 
-/// Pantalla 12 · "Tus placas". Ledger en memoria por ahora (ver
-/// `SessionController.consume()`) — Fase 4+ lo respalda con
-/// `placa_events` en Postgres (ARCHITECTURE.md §4), pero la UI no cambia.
+/// Pantalla 12 · "Tus placas". Ledger en memoria de la sesión de la app
+/// (ver `SessionController.generatePlaca()`), poblado con cada generación
+/// ya confirmada por el backend — `placa_events` en Postgres
+/// (ARCHITECTURE.md §4) es la fuente de verdad real, pero no hay endpoint
+/// para leer el historial completo desde ahí todavía; la UI no cambia
+/// cuando eso se agregue.
 class HistoryScreen extends ConsumerWidget {
   const HistoryScreen({super.key});
 
