@@ -80,3 +80,18 @@ flutter:
   uses-material-design: true
   assets:
     - lib/placas/packs/remax/assets/
+  # "Space Mono" y "DM Serif Display": usadas tanto por el design system
+  # neutro de la app (app/theme/app_theme.dart) como, por nombre, por los
+  # templates del pack RE/MAX — ver lib/app/theme/fonts/LICENSES.md sobre
+  # por qué viven acá y no bajo placas/packs/remax/assets/. Pesos limitados
+  # a los que el código realmente usa (Regular/Bold para Space Mono, solo
+  # Regular para DM Serif Display).
+  fonts:
+    - family: Space Mono
+      fonts:
+        - asset: lib/app/theme/fonts/SpaceMono-Regular.ttf
+        - asset: lib/app/theme/fonts/SpaceMono-Bold.ttf
+          weight: 700
+    - family: DM Serif Display
+      fonts:
+        - asset: lib/app/theme/fonts/DMSerifDisplay-Regular.ttf

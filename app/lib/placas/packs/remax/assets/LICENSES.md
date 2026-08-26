@@ -21,9 +21,15 @@ todavía no tenga archivos binarios adentro.
   riesgo legal real al lado del logo de RE/MAX — esto debe resolverse con
   ilustraciones encargadas o un set explícitamente licenciado antes de
   salir a producción, documentado en este mismo archivo cuando exista.
-- **Fuentes** ("Space Grotesk", "Space Mono", "DM Serif Display"): tampoco
-  están empaquetadas todavía — ver ARCHITECTURE.md §9 trampa 3 (nada de
-  fetch de fuentes en runtime para el contenido de una placa).
+- **Fuentes**: "Space Mono" y "DM Serif Display" (las que usan los
+  templates de este pack) ya están empaquetadas como asset real — ver
+  `lib/app/theme/fonts/LICENSES.md`. Viven ahí (junto al design system de
+  la app) y no acá, porque ambas familias también las usa el design system
+  neutro de la app (`app_theme.dart`), no son exclusivas de este pack; la
+  declaración en `pubspec.yaml` las registra de forma global, así que este
+  pack las usa igual sin necesitar los archivos localmente. "Space Grotesk"
+  (fuente sans del tema de la app, no usada por ningún template de este
+  pack) sigue sin empaquetar — ver ARCHITECTURE.md §9 trampa 3.
 
 Ninguno de estos tres puntos bloquea el flujo funcional (login → wizard →
 template → preview → compartir): la placa se genera y se ve completa, solo

@@ -4,12 +4,15 @@ import 'app_colors.dart';
 import 'app_spacing.dart';
 
 /// Familias tipográficas del mockup: "Space Grotesk" (cuerpo), "Space Mono"
-/// (kickers/metadata), "DM Serif Display" (headlines grandes). Ninguna está
-/// empaquetada como asset todavía (no hay archivos .ttf en el repo), así que
-/// caen a la fuente del sistema hasta que se agreguen — ver ARCHITECTURE.md
+/// (kickers/metadata), "DM Serif Display" (headlines grandes).
+///
+/// "Space Mono" y "DM Serif Display" ya están empaquetadas como asset real
+/// (`lib/app/theme/fonts/`, declaradas en `pubspec.yaml`) — ver
+/// `lib/app/theme/fonts/LICENSES.md`. "Space Grotesk" (cuerpo) todavía no:
+/// sigue cayendo en silencio a la fuente del sistema — ver ARCHITECTURE.md
 /// §9 trampa 3 (misma regla que para el contenido de las placas: nada de
-/// fetch de fuentes en runtime). Cuando se agreguen los .ttf, alcanza con
-/// declarar `fontFamily` acá; el resto de la app ya usa `Theme.of(context)`.
+/// fetch de fuentes en runtime). Cuando se agregue su .ttf, alcanza con
+/// declararlo en `pubspec.yaml`; el resto de la app ya usa `Theme.of(context)`.
 const _fontSans = 'Space Grotesk';
 const _fontMono = 'Space Mono';
 const _fontDisplay = 'DM Serif Display';

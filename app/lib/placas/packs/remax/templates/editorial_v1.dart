@@ -55,9 +55,19 @@ class EditorialTemplate extends PlacaTemplate {
               children: [
                 BrandLogo(brand: RemaxBrand.theme, height: cqw(6)),
                 const Spacer(),
-                Text(
-                  '${model.kicker} · ${model.tipoLabel}'.toUpperCase(),
-                  style: TextStyle(fontFamily: 'Space Mono', fontSize: cqw(2.7), letterSpacing: 1.8, color: RemaxBrand.ink),
+                // Bug real encontrado con golden tests (kicker de búsqueda,
+                // ej. "BUSCO PARA ALQUILAR", combinado con tipoLabel y
+                // letterSpacing): un `Text` crudo sin tope de ancho hacía
+                // overflow del `Row` en feed y story. `Flexible` + `PlacaLabel`
+                // aplica acá la misma política "label" que zona (shrink,
+                // después ellipsis a 1 línea) en vez de reventar el layout.
+                Flexible(
+                  child: PlacaLabel(
+                    '${model.kicker} · ${model.tipoLabel}'.toUpperCase(),
+                    maxLines: 1,
+                    textAlign: TextAlign.right,
+                    style: TextStyle(fontFamily: 'Space Mono', fontSize: cqw(2.7), letterSpacing: 1.8, color: RemaxBrand.ink),
+                  ),
                 ),
               ],
             ),
