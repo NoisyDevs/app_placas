@@ -1,23 +1,90 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/widgets/app_button.dart';
-import '../../../app/widgets/app_toast.dart';
+import '../../../app/widgets/app_callout.dart';
+import '../../../services/backend_client.dart';
 import '../../session/session_controller.dart';
 
 /// Pantalla 11 · muro de upgrade (ARCHITECTURE.md §5: se muestra ANTES de
-/// que el agente cargue datos si ya está en 0). `upgradeNow()` acá es fake
-/// local — la suscripción real de Mercado Pago (§6) llega en Fase 6.
-class UpgradeScreen extends ConsumerWidget {
+/// que el agente cargue datos si ya está en 0). El botón dispara
+/// `POST /v1/billing/subscribe` de verdad — no hay credenciales reales de
+/// Mercado Pago en dev, así que esa llamada le falla a MP (401) y el
+/// backend la propaga como 500; acá se maneja esa falla con un mensaje
+/// claro en vez de simular que la suscripción funcionó (ARCHITECTURE.md
+/// §6, máquina de estados: pasar a `pro` solo lo confirma el webhook).
+class UpgradeScreen extends ConsumerStatefulWidget {
   const UpgradeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<UpgradeScreen> createState() => _UpgradeScreenState();
+}
+
+class _UpgradeScreenState extends ConsumerState<UpgradeScreen> {
+  BillingStatusResult? _status;
+  String? _statusError;
+  bool _loadingStatus = true;
+
+  bool _subscribing = false;
+  String? _subscribeError;
+  SubscribeResult? _subscribeResult;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStatus();
+  }
+
+  Future<void> _loadStatus() async {
+    setState(() {
+      _loadingStatus = true;
+      _statusError = null;
+    });
+    try {
+      final status = await ref.read(backendClientProvider).getBillingStatus();
+      if (mounted) setState(() => _status = status);
+    } on BackendException catch (e) {
+      if (mounted) setState(() => _statusError = 'No pudimos leer tu estado de suscripción. ${e.message}');
+    } finally {
+      if (mounted) setState(() => _loadingStatus = false);
+    }
+  }
+
+  Future<void> _subscribe() async {
+    final email = Supabase.instance.client.auth.currentSession?.user.email;
+    if (email == null || email.isEmpty) {
+      setState(() => _subscribeError = 'Necesitás una cuenta con email para suscribirte a Mercado Pago.');
+      return;
+    }
+    setState(() {
+      _subscribing = true;
+      _subscribeError = null;
+      _subscribeResult = null;
+    });
+    try {
+      final result = await ref.read(backendClientProvider).subscribe(payerEmail: email);
+      if (!mounted) return;
+      setState(() => _subscribeResult = result);
+    } on BackendException catch (e) {
+      if (!mounted) return;
+      // Esperado en dev: las credenciales de Mercado Pago son placeholders,
+      // así que esto va a fallar hasta que se configuren credenciales
+      // reales. El flujo de la app no debe fingir que funcionó.
+      setState(() => _subscribeError = e.statusCode == 0
+          ? 'No hay conexión con el servidor. Probá de nuevo en unos minutos.'
+          : 'No pudimos iniciar el pago con Mercado Pago. Probá de nuevo más tarde o contactá a soporte.');
+    } finally {
+      if (mounted) setState(() => _subscribing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
-    final controller = ref.read(sessionProvider.notifier);
 
     return Scaffold(
       body: Container(
@@ -63,7 +130,9 @@ class UpgradeScreen extends ConsumerWidget {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Usaste tus ${session.limit} placas gratis del mes',
+                        session.limit == null
+                            ? 'Ya usaste todo tu cupo de placas de este mes'
+                            : 'Usaste tus ${session.limit} placas gratis del mes',
                         textAlign: TextAlign.center,
                         style: const TextStyle(fontFamily: 'DM Serif Display', fontSize: 30, height: 1.1, color: AppColors.white),
                       ),
@@ -73,6 +142,17 @@ class UpgradeScreen extends ConsumerWidget {
                         textAlign: TextAlign.center,
                         style: TextStyle(fontSize: 15, height: 1.5, color: AppColors.ink100),
                       ),
+                      if (!_loadingStatus && _status != null) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          'Estado actual: ${_status!.tier} · ${_status!.status}',
+                          style: const TextStyle(fontSize: 12, color: AppColors.ink100),
+                        ),
+                      ],
+                      if (_statusError != null) ...[
+                        const SizedBox(height: 10),
+                        Text(_statusError!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, color: AppColors.ink100)),
+                      ],
                       const SizedBox(height: 24),
                       Container(
                         width: double.infinity,
@@ -128,16 +208,31 @@ class UpgradeScreen extends ConsumerWidget {
                       ),
                       const SizedBox(height: AppSpacing.s4),
                       AppButton(
-                        label: 'Pasar a ilimitado',
+                        label: _subscribing ? 'Conectando con Mercado Pago…' : 'Pasar a ilimitado',
                         variant: AppButtonVariant.primary,
                         size: AppButtonSize.lg,
                         full: true,
-                        onPressed: () {
-                          controller.upgradeNow();
-                          showAppToast(context, '¡Listo! Ahora tenés placas ilimitadas');
-                          context.go('/home');
-                        },
+                        onPressed: _subscribing ? null : _subscribe,
                       ),
+                      if (_subscribeError != null) ...[
+                        const SizedBox(height: 12),
+                        AppCallout(
+                          title: 'No pudimos iniciar el pago',
+                          message: _subscribeError!,
+                          variant: AppCalloutVariant.violet,
+                        ),
+                      ],
+                      if (_subscribeResult != null) ...[
+                        const SizedBox(height: 12),
+                        AppCallout(
+                          title: 'Suscripción iniciada',
+                          message:
+                              'Se creó tu suscripción en Mercado Pago (preapproval ${_subscribeResult!.preapprovalId}). '
+                              'Completá el pago en: ${_subscribeResult!.initPoint.isEmpty ? '(sin link — revisá con soporte)' : _subscribeResult!.initPoint}. '
+                              'Tu plan pasa a Pro apenas Mercado Pago confirme el pago.',
+                          variant: AppCalloutVariant.green,
+                        ),
+                      ],
                       const SizedBox(height: 14),
                       InkWell(
                         onTap: () => context.go('/home'),

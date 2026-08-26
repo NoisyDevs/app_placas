@@ -12,6 +12,7 @@ import '../../../app/widgets/app_toast.dart';
 import '../../../domain/property_enums.dart';
 import '../../../placas/export/placa_exporter.dart';
 import '../../../placas/placa_preview.dart';
+import '../../../services/backend_client.dart';
 import '../../../services/share_service.dart';
 import '../../session/session_controller.dart';
 
@@ -21,7 +22,9 @@ import '../../session/session_controller.dart';
 /// `Offstage: true` (ARCHITECTURE.md §9, trampa 2) — y `capturePlacaPng`
 /// compensa la escala del `FittedBox` con `pixelRatio` para emitir siempre
 /// el PNG a resolución real (1080×1080 / 1080×1920), sin importar el
-/// tamaño con el que se esté mostrando este preview.
+/// tamaño con el que se esté mostrando este preview. El crédito se pide de
+/// verdad al backend (`generatePlaca`, ARCHITECTURE.md §5.3-4) antes de
+/// capturar — el render solo corre después de `granted`.
 class ShareScreen extends ConsumerStatefulWidget {
   const ShareScreen({super.key});
 
@@ -33,14 +36,14 @@ class _ShareScreenState extends ConsumerState<ShareScreen> {
   final GlobalKey _boundaryKey = GlobalKey();
   bool _busy = false;
 
-  /// Local y por-visita-de-pantalla, igual que el resto de `SessionState`
-  /// (Fase 3 de ARCHITECTURE.md §8 — todavía no hay `POST
-  /// /v1/placas/consume`). Descargar y compartir la MISMA placa generada
-  /// en esta visita consumen un solo crédito, no uno por botón tocado —
-  /// coincide con la regla real ("1 placa = 1 acto de generación",
-  /// ARCHITECTURE.md §4) sin necesitar todavía un `request_id` de
-  /// servidor para la idempotencia.
-  bool _consumed = false;
+  /// `true` una vez que el backend ya otorgó el crédito de generación para
+  /// la placa de ESTA visita (ARCHITECTURE.md §4, "1 placa = 1 acto de
+  /// generación"). Descargar y compartir la MISMA placa en la misma visita
+  /// van todas por acá — solo la primera llamada exitosa a
+  /// `generatePlaca()` consume cupo real; las siguientes (otro botón de
+  /// compartir, otro tap) reusan `_granted` y solo vuelven a capturar/
+  /// guardar, sin pedirle un segundo crédito al backend.
+  bool _granted = false;
 
   Future<void> _runExport(
     Future<PlacaShareResult> Function(Uint8List bytes, {required String fileName}) action,
@@ -58,13 +61,43 @@ class _ShareScreenState extends ConsumerState<ShareScreen> {
       context.go('/profile');
       return;
     }
-    if (session.left <= 0) {
+    // `session.left == null` es cupo ilimitado (pro/cortesía) — nunca
+    // bloquea. Este chequeo es solo un atajo local para no gastar una
+    // llamada de red cuando ya sabemos que está en cero; el backend
+    // (`generatePlaca` más abajo) es la fuente de verdad real.
+    if (!_granted && session.left != null && session.left! <= 0) {
       context.go('/upgrade');
       return;
     }
 
     setState(() => _busy = true);
     try {
+      if (!_granted) {
+        final controller = ref.read(sessionProvider.notifier);
+        final backendClient = ref.read(backendClientProvider);
+        try {
+          final outcome = await controller.generatePlaca(backendClient);
+          if (outcome == GenerateOutcome.quotaExceeded) {
+            if (mounted) context.go('/upgrade');
+            return;
+          }
+        } on QuotaExceededException {
+          if (mounted) context.go('/upgrade');
+          return;
+        } on BackendException catch (e) {
+          if (mounted) {
+            showAppToast(
+              context,
+              e.statusCode == 0
+                  ? 'No hay conexión con el servidor. Probá de nuevo.'
+                  : 'No pudimos generar la placa. Probá de nuevo.',
+            );
+          }
+          return;
+        }
+        _granted = true;
+      }
+
       final Uint8List bytes;
       try {
         bytes = await capturePlacaPng(boundaryKey: _boundaryKey, format: session.format);
@@ -77,10 +110,6 @@ class _ShareScreenState extends ConsumerState<ShareScreen> {
       final result = await action(bytes, fileName: fileName);
       if (!mounted) return;
 
-      if (result.ok && !_consumed) {
-        _consumed = true;
-        ref.read(sessionProvider.notifier).consume();
-      }
       showAppToast(context, result.message ?? (result.ok ? 'Listo.' : 'Algo salió mal.'));
     } finally {
       if (mounted) setState(() => _busy = false);

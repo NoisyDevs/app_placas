@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../domain/agent_profile.dart';
 import '../../domain/caracteristicas.dart';
@@ -8,14 +9,21 @@ import '../../domain/placa_spec.dart';
 import '../../domain/precio.dart';
 import '../../domain/property_data.dart';
 import '../../domain/property_enums.dart';
+import '../../domain/request_id.dart';
 import '../../domain/search_data.dart';
 import '../../placas/registry.dart';
+import '../../services/backend_client.dart';
 import '../../services/supabase_service.dart';
 
 /// Sentinel para distinguir "no pasé este argumento a `copyWith`" de
 /// "lo pasé explícitamente en `null`" — ver los comentarios en
 /// `PropertyDraft.copyWith` / `SearchDraft.copyWith`.
 const Object _unset = Object();
+
+/// Resultado de `SessionController.generatePlaca()` que sí le importa a la
+/// UI (el resto de los errores de backend se manejan como excepciones —
+/// ver `BackendException` en `services/backend_client.dart`).
+enum GenerateOutcome { granted, quotaExceeded }
 
 /// Estado compartido de toda la sesión: perfil del agente, borrador del
 /// wizard (publicación o búsqueda), cupo y historial.
@@ -186,6 +194,8 @@ class SessionState {
     required this.used,
     required this.limit,
     required this.history,
+    this.quotaLoaded = false,
+    this.pendingGenerationRequestId,
   });
 
   final AgentProfile agent;
@@ -196,10 +206,29 @@ class SessionState {
   final PlacaFormat format;
   final bool includeContact;
   final int used;
-  final int limit;
+
+  /// Cupo mensual real, leído de `quota_status()` (Supabase). `null` ==
+  /// cupo ilimitado (plan pro vigente o cortesía) — ver
+  /// ARCHITECTURE.md §4/§5. Antes de la primera `refreshQuota()` exitosa
+  /// esto es un valor local de arranque (`quotaLoaded == false`), no el
+  /// cupo real del agente.
+  final int? limit;
   final List<HistoryEntry> history;
 
-  int get left => (limit - used).clamp(0, limit);
+  /// `true` una vez que `refreshQuota()` trajo el cupo real al menos una
+  /// vez en esta sesión de la app.
+  final bool quotaLoaded;
+
+  /// `request_id` cacheado del intento de generación en curso. Se genera
+  /// una sola vez por intento (no en cada tap) para que un doble-tap en
+  /// "Generar"/"Descargar" sea idempotente por construcción — ver
+  /// ARCHITECTURE.md §5.3. Se limpia cuando el intento termina (otorgado o
+  /// cupo agotado) y se mantiene si falló por otra razón, para que el
+  /// reintento reuse el mismo id.
+  final String? pendingGenerationRequestId;
+
+  /// `null` == cupo ilimitado. Nunca negativo.
+  int? get left => limit == null ? null : (limit! - used).clamp(0, limit!);
 
   PlacaContent get content => mode == PlacaKind.publicacion
       ? PublicacionContent(propertyDraft.toDomain())
@@ -214,8 +243,10 @@ class SessionState {
     PlacaFormat? format,
     bool? includeContact,
     int? used,
-    int? limit,
+    Object? limit = _unset,
     List<HistoryEntry>? history,
+    bool? quotaLoaded,
+    Object? pendingGenerationRequestId = _unset,
   }) {
     return SessionState(
       agent: agent ?? this.agent,
@@ -226,8 +257,11 @@ class SessionState {
       format: format ?? this.format,
       includeContact: includeContact ?? this.includeContact,
       used: used ?? this.used,
-      limit: limit ?? this.limit,
+      limit: identical(limit, _unset) ? this.limit : limit as int?,
       history: history ?? this.history,
+      quotaLoaded: quotaLoaded ?? this.quotaLoaded,
+      pendingGenerationRequestId:
+          identical(pendingGenerationRequestId, _unset) ? this.pendingGenerationRequestId : pendingGenerationRequestId as String?,
     );
   }
 
@@ -296,7 +330,12 @@ class SessionState {
       templateId: defaultTemplateId,
       format: PlacaFormat.feed,
       includeContact: true,
-      used: 9,
+      // Placeholder de arranque, no el cupo real — se sobreescribe con
+      // `refreshQuota()` apenas la sesión tiene un agente logueado (Home,
+      // y antes de entrar al wizard). `quotaLoaded` queda en `false` hasta
+      // entonces para que la UI pueda distinguir "sin datos todavía" de
+      // "cupo en cero".
+      used: 0,
       limit: 10,
       history: history,
     );
@@ -368,32 +407,79 @@ class SessionController extends Notifier<SessionState> {
     state = state.copyWith(includeContact: value);
   }
 
-  /// Historia 2.x "Generar": consume 1 de cupo y agrega la placa al
-  /// historial. La UI debe llamar esto solo cuando `state.left > 0` — si
-  /// no, redirige a `/upgrade` (ver ARCHITECTURE.md §5, "el render solo
-  /// ocurre después de `granted`"; acá `granted` es local/fake hasta que
-  /// exista `POST /v1/placas/consume`).
-  void consume() {
-    final content = state.content;
-    final nextId = state.history.isEmpty ? 1 : (state.history.map((e) => e.id).reduce((a, b) => a > b ? a : b) + 1);
-    final entry = HistoryEntry(
-      id: nextId,
-      templateId: state.templateId,
-      content: content,
-      fecha: 'Recién',
-      titulo: _titleFor(content),
-    );
+  /// Lee el cupo real de Supabase (`rpc('quota_status')`) y reemplaza
+  /// `used`/`limit` locales por los del servidor — ARCHITECTURE.md §5.2 y
+  /// §3 ("el cliente solo tiene una proyección `QuotaStatus` de solo
+  /// lectura, nunca un contador que pueda escribir"). Se llama en Home al
+  /// entrar y de nuevo justo antes de abrir el wizard, para que el muro de
+  /// upgrade se decida con el dato más fresco posible.
+  ///
+  /// Deja el estado previo intacto y relanza la excepción si la llamada
+  /// falla (sin sesión de Supabase, sin red, etc.) — el caller decide cómo
+  /// mostrarlo; esta capa no sabe de `BuildContext`.
+  Future<void> refreshQuota() async {
+    final rows = await Supabase.instance.client.rpc('quota_status') as List<dynamic>;
+    if (rows.isEmpty) return; // no debería pasar: el trigger de signup crea la fila de subscription
+    final row = rows.first as Map<String, dynamic>;
     state = state.copyWith(
-      used: state.used + 1 > state.limit ? state.limit : state.used + 1,
-      history: [entry, ...state.history],
+      used: (row['used'] as num).toInt(),
+      limit: (row['quota_limit'] as num?)?.toInt(),
+      quotaLoaded: true,
     );
   }
 
-  /// Fake local, equivalente al `upgradeNow()` del mockup: hasta que exista
-  /// la suscripción real de Mercado Pago (ARCHITECTURE.md §6), "pasar a
-  /// ilimitado" solo resetea el contador del mes.
-  void upgradeNow() {
-    state = state.copyWith(used: 0);
+  /// Historia 2.x "Generar": le pide permiso real al backend
+  /// (`POST /v1/placas/consume`) antes de dar la placa por generada — el
+  /// render (Fase 2, ya construido) solo debe correr después de que esto
+  /// resuelva en `GenerateOutcome.granted` (ARCHITECTURE.md §5.3-4). La UI
+  /// que llama esto decide qué hacer con cada resultado: `quotaExceeded` ->
+  /// navegar a `/upgrade`; una `BackendException` sin capturar acá sube tal
+  /// cual para que la pantalla muestre un mensaje y permita reintentar.
+  ///
+  /// El `request_id` se genera una sola vez por intento y se cachea en
+  /// `pendingGenerationRequestId` mientras el intento no haya resuelto en
+  /// `granted` o `quotaExceeded` — así un doble-tap, o un reintento tras un
+  /// error de red, reenvía el mismo id y el backend lo trata como replay
+  /// idempotente en vez de cobrar dos veces.
+  Future<GenerateOutcome> generatePlaca(BackendClient backendClient) async {
+    final requestId = state.pendingGenerationRequestId ?? generateRequestId();
+    if (state.pendingGenerationRequestId == null) {
+      state = state.copyWith(pendingGenerationRequestId: requestId);
+    }
+
+    try {
+      final result = await backendClient.consumePlacaCredit(
+        requestId: requestId,
+        templateId: state.templateId,
+        kind: state.mode.name,
+        formats: [state.format.name],
+        includeContact: state.includeContact,
+      );
+
+      final content = state.content;
+      final nextId = state.history.isEmpty ? 1 : (state.history.map((e) => e.id).reduce((a, b) => a > b ? a : b) + 1);
+      final entry = HistoryEntry(
+        id: nextId,
+        templateId: state.templateId,
+        content: content,
+        fecha: 'Recién',
+        titulo: _titleFor(content),
+      );
+      state = state.copyWith(
+        used: result.used,
+        limit: result.quotaLimit,
+        quotaLoaded: true,
+        history: [entry, ...state.history],
+        pendingGenerationRequestId: null,
+      );
+      return GenerateOutcome.granted;
+    } on QuotaExceededException catch (e) {
+      state = state.copyWith(used: e.used, limit: e.quotaLimit, quotaLoaded: true, pendingGenerationRequestId: null);
+      return GenerateOutcome.quotaExceeded;
+    }
+    // Cualquier otro BackendException (red caída, 401, 500...) se deja
+    // subir sin tocar `pendingGenerationRequestId`: ARCHITECTURE.md §5.5,
+    // "el reintento reenvía el mismo request_id (idempotente, gratis)".
   }
 
   String _titleFor(PlacaContent content) {
