@@ -26,6 +26,8 @@ class Settings(BaseSettings):
 
     mercadopago_access_token: str = "TEST-local-dev-token"
     mercadopago_webhook_secret: str = "local-dev-webhook-secret"
+    # Precio mensual de la suscripción Pro, en ARS.
+    mercadopago_monthly_amount_ars: float = 8500.0
 
     @property
     def supabase_jwks_url(self) -> str:

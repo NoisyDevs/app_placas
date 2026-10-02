@@ -41,6 +41,7 @@ class HttpMercadoPagoClient:
     _BASE_URL = "https://api.mercadopago.com"
 
     def __init__(self, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None):
+        self._monthly_amount_ars = settings.mercadopago_monthly_amount_ars
         self._client = httpx.AsyncClient(
             base_url=self._BASE_URL,
             headers={"Authorization": f"Bearer {settings.mercadopago_access_token}"},
@@ -65,9 +66,10 @@ class HttpMercadoPagoClient:
                     "frequency": 1,
                     "frequency_type": "months",
                     "currency_id": "ARS",
-                    # El monto se define en config/negocio, no hardcodeado
-                    # acá — ver ARCHITECTURE.md §9 sobre la cláusula de
+                    # El monto sale de Settings. En ARS queda fijo al crear la
+                    # suscripción — ver ARCHITECTURE.md §9 (punto 5) sobre la
                     # actualización trimestral del precio.
+                    "transaction_amount": self._monthly_amount_ars,
                 },
                 "status": "pending",
             },
