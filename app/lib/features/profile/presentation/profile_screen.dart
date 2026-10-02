@@ -13,6 +13,7 @@ import '../../../app/widgets/app_scaffold.dart';
 import '../../../app/widgets/app_text_field.dart';
 import '../../../app/widgets/app_toast.dart';
 import '../../../placas/kit/contact_strip.dart';
+import '../../../services/photo_normalizer.dart';
 import '../../../services/supabase_service.dart';
 import '../../session/session_controller.dart';
 
@@ -70,7 +71,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     try {
       // Siempre bytes, nunca una ruta de disco (ARCHITECTURE.md §7: el
       // pipeline de fotos es bytes-only e idéntico en mobile/web).
-      final bytes = await picked.readAsBytes();
+      final bytes = await normalizePhotoOrientation(await picked.readAsBytes());
       final extension = _extensionOf(picked.name);
       final path = await SupabaseService.instance.uploadAvatar(
         agentId: agentId,

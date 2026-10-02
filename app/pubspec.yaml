@@ -52,6 +52,7 @@ dependencies:
   # Web Share API) — dart:js_interop, nunca dart:html (deprecado en el Dart
   # de este proyecto). Ver services/share_service_web.dart.
   web: ^1.1.1
+  image: ^4.10.1
 
 dev_dependencies:
   flutter_test:

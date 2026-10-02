@@ -13,6 +13,7 @@ import '../../../app/widgets/app_selectors.dart';
 import '../../../app/widgets/app_switch.dart';
 import '../../../app/widgets/app_text_field.dart';
 import '../../../domain/property_enums.dart';
+import '../../../services/photo_normalizer.dart';
 import '../../session/session_controller.dart';
 
 const _tiposRapidos = [TipoPropiedad.casa, TipoPropiedad.departamento, TipoPropiedad.ph, TipoPropiedad.lote];
@@ -225,7 +226,7 @@ class _PhotoGrid extends StatelessWidget {
   Future<void> _pick(BuildContext context) async {
     final file = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 90);
     if (file == null) return;
-    final bytes = await file.readAsBytes();
+    final bytes = await normalizePhotoOrientation(await file.readAsBytes());
     final next = [...fotos, bytes];
     onChanged(next.length > _maxFotos ? next.sublist(next.length - _maxFotos) : next);
   }
