@@ -21,7 +21,7 @@ supabase/    schema.sql — Postgres + RLS (perfil, suscripción, cupo)
 cd backend
 python -m venv .venv
 .venv/Scripts/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # includes test deps
 cp .env.example .env          # completar con credenciales reales
 pytest                        # 30 tests
 uvicorn app.main:app --reload
